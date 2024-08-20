@@ -1,0 +1,254 @@
+---
+title: "Eberle_Covid19Final"
+author: "Ben Eberle"
+date: "2024-08-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(lubridate)
+```
+Data Overview and Exploration
+
+Before diving into the analysis, it’s important to understand the structure and contents of the dataset. This section will provide a summary and some basic exploratory analysis to help you get familiar with the data.
+
+```{r import_data, include=TRUE}
+# Import the data
+confirmed <- read_csv("time_series_covid19_confirmed_global.csv")
+
+# Overview of the data structure
+glimpse(confirmed)
+
+# Summary of key columns
+#summary(confirmed)
+
+# Check for missing values
+missing_values <- confirmed %>%
+  summarize_all(~ sum(is.na(.)))
+
+# Print missing values summary
+print(missing_values)
+
+# Exploratory Data Analysis (EDA)
+# Calculate total cases per country
+country_summary <- confirmed %>%
+  pivot_longer(cols = starts_with("1/"), 
+               names_to = "date", 
+               values_to = "confirmed_cases") %>%
+  mutate(date = mdy(date)) %>%
+  group_by(Country) %>%
+  summarize(total_cases = sum(confirmed_cases, na.rm = TRUE),
+            max_daily_cases = max(confirmed_cases, na.rm = TRUE),
+            first_case_date = min(date[confirmed_cases > 0])) %>%
+  arrange(desc(total_cases))
+
+# Display the top 10 countries by total cases
+head(country_summary, 10)
+
+# Visualization: Total Cases by Country
+ggplot(country_summary, aes(x = reorder(Country, -total_cases), y = total_cases)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  theme_minimal() +
+  labs(title = "Total Confirmed COVID-19 Cases by Country",
+       x = "Country",
+       y = "Total Confirmed Cases")
+
+# View the structure of the data
+#str(confirmed)
+
+# Tidy the data
+confirmed_long <- confirmed %>%
+  pivot_longer(cols = starts_with("1/"), 
+               names_to = "date", 
+               values_to = "confirmed_cases") %>%
+  mutate(date = mdy(date)) %>%
+  group_by(Country, date) %>%
+  summarize(confirmed_cases = sum(confirmed_cases, na.rm = TRUE)) %>%
+  ungroup()
+
+# Check the first few rows of the tidy data
+head(confirmed_long)
+```
+Exploratory Data Analysis (EDA)
+
+Next, we perform some exploratory data analysis to calculate total cases per country and identify which countries were most affected.
+```{r analysis, include=TRUE}
+# Calculate total cases per country
+country_summary <- confirmed %>%
+  pivot_longer(cols = starts_with("1/"), 
+               names_to = "date", 
+               values_to = "confirmed_cases") %>%
+  mutate(date = mdy(date)) %>%
+  group_by(Country) %>%
+  summarize(total_cases = sum(confirmed_cases, na.rm = TRUE),
+            max_daily_cases = max(confirmed_cases, na.rm = TRUE),
+            first_case_date = min(date[confirmed_cases > 0])) %>%
+  arrange(desc(total_cases))
+
+# Display the top 10 countries by total cases
+head(country_summary, 10)
+```
+Global and Country-Specific Trends
+
+Global Trends of Confirmed COVID-19 Cases
+
+We aggregate the data to observe the global trends in confirmed COVID-19 cases over time.
+```{r global_trends, include=TRUE}
+# Aggregate data to see global trends
+global_trend <- confirmed_long %>%
+  group_by(date) %>%
+  summarize(global_confirmed_cases = sum(confirmed_cases))
+
+# Plot global trend over time
+ggplot(global_trend, aes(x = date, y = global_confirmed_cases)) +
+  geom_line(color = "blue") +
+  theme_minimal() +
+  labs(title = "Global Trends of Confirmed COVID-19 Cases",
+       x = "Date",
+       y = "Total Confirmed Cases")
+```
+Country-Specific Case Counts
+
+We further analyze the trends for selected countries to compare their experiences during the pandemic.
+```{r country_counts, include=TRUE}
+# Select a few key countries for comparison
+selected_countries <- c("US", "Italy", "South Korea", "Germany", "Brazil")
+
+country_trend <- confirmed_long %>%
+  filter(Country %in% selected_countries)
+
+# Plot country-specific trends
+ggplot(country_trend, aes(x = date, y = confirmed_cases, color = Country)) +
+  geom_line() +
+  theme_minimal() +
+  labs(title = "Country-Specific COVID-19 Case Counts",
+       x = "Date",
+       y = "Confirmed Cases",
+       color = "Country")
+```
+Modeling: Impact of Lockdowns on Growth Rate of Cases
+
+Calculating Daily Growth Rate
+
+To understand the impact of lockdowns, we calculate the daily growth rate of confirmed cases for each country.
+```{r daily_growth, include=TRUE}
+# Calculate daily growth rate
+confirmed_long <- confirmed %>%
+  pivot_longer(cols = starts_with("1/"), 
+               names_to = "date", 
+               values_to = "confirmed_cases") %>%
+  mutate(date = mdy(date)) %>%
+  group_by(Country) %>%
+  arrange(date) %>%
+  mutate(daily_growth_rate = (confirmed_cases - lag(confirmed_cases)) / lag(confirmed_cases) * 100) %>%
+  ungroup()
+
+# Remove rows with NA, NaN, or Inf in daily_growth_rate
+confirmed_long <- confirmed_long %>%
+  filter(is.finite(daily_growth_rate))
+```
+
+We model the impact of lockdowns on the daily growth rate using a linear model, focusing on a selected group of countries.
+```{r lockdown_impact_f, include=TRUE}
+# Calculate daily growth rate
+confirmed_long <- confirmed_long %>%
+  group_by(Country) %>%
+  arrange(date) %>%
+  mutate(daily_growth_rate = (confirmed_cases - lag(confirmed_cases)) / lag(confirmed_cases) * 100) %>%
+  ungroup()
+
+# Remove rows with NA, NaN, or Inf in daily_growth_rate
+confirmed_long <- confirmed_long %>%
+  filter(is.finite(daily_growth_rate))
+
+# Check for any remaining problematic values
+sum(is.na(confirmed_long$daily_growth_rate)) # should be 0
+
+# Example lockdown dates for these countries
+lockdown_dates <- tibble(
+  Country = c("US", "Italy", "South Korea", "Germany", "Brazil"),
+  lockdown_date = as.Date(c("2020-03-19", "2020-03-09", "2020-02-23", "2020-03-22", "2020-03-24"))
+)
+
+# Select the countries that were included in the model training
+selected_countries <- c("US", "Italy", "South Korea", "Germany", "Brazil")
+
+# Filter the dataset to only include these countries
+model_data <- confirmed_long %>%
+  filter(Country %in% selected_countries)
+
+# Merge with lockdown dates
+model_data <- model_data %>%
+  left_join(lockdown_dates, by = "Country") %>%
+  mutate(post_lockdown = ifelse(date >= lockdown_date, 1, 0))
+
+# Fit the model again with the filtered data
+model <- lm(daily_growth_rate ~ post_lockdown + Country, data = model_data)
+summary(model)
+
+# Predicting with the same countries
+model_data <- model_data %>%
+  mutate(predicted_growth_rate = predict(model, model_data))
+
+# Visualization
+ggplot(model_data, aes(x = date, y = daily_growth_rate, color = Country)) +
+  geom_line() +
+  geom_point(aes(y = predicted_growth_rate), shape = 1, size = 3) +
+  theme_minimal() +
+  labs(title = "Effectiveness of Lockdowns on COVID-19 Growth Rate",
+       x = "Date",
+       y = "Daily Growth Rate (%)",
+       color = "Country")
+```
+Bias Analysis
+
+4.1 Data Coverage and Selection Bias
+
+Geographical Bias:
+
+	•	Description: The analysis focuses on a subset of countries, including the US, Italy, South Korea, Germany, and Brazil. While these countries were significantly impacted by COVID-19, they represent only a fraction of the global landscape.
+	•	Implications: This selection may lead to an overestimation or underestimation of global trends. For instance, countries with different healthcare infrastructures, government responses, and public compliance levels might show different patterns in case growth and response to lockdowns. By focusing on these selected countries, we may miss out on understanding the full spectrum of pandemic responses and outcomes across the world.
+
+Temporal Bias:
+
+	•	Description: The dataset covers confirmed COVID-19 cases from January 22, 2020, to March 9, 2023. This period includes multiple waves of the pandemic, various public health interventions, and the introduction of vaccines.
+	•	Implications: The timing of lockdowns and other interventions varied widely across countries. Early interventions might show different impacts compared to those implemented later in the pandemic. Additionally, as the pandemic evolved, factors such as changes in testing capacity, public behavior, and mutations of the virus could influence the effectiveness of interventions. Analyzing the entire period without accounting for these evolving factors may lead to oversimplified conclusions.
+
+Selection of Variables:
+
+	•	Description: The model uses only two variables: whether the date is post-lockdown and the country itself. This approach assumes that lockdowns and country differences are the primary determinants of changes in the daily growth rate.
+	•	Implications: This may neglect other crucial factors such as public compliance, healthcare capacity, economic conditions, social behavior, and subsequent public health measures (e.g., mask mandates, vaccination campaigns). The model’s simplicity might mask the complexity of factors that contribute to the spread of COVID-19, leading to biased or incomplete conclusions.
+
+4.2 Modeling Bias
+
+Linear Assumptions:
+
+	•	Description: The linear model assumes a straightforward, proportional relationship between the implementation of lockdowns and the reduction in daily growth rates. It also assumes that the impact of lockdowns is uniform across all countries.
+	•	Implications: In reality, the relationship between interventions like lockdowns and case growth may be non-linear. Factors such as public compliance, healthcare system capacity, and the timing of interventions can create non-linear effects. For instance, early and strict lockdowns might have a more significant impact compared to delayed or less stringent measures. The linear assumption might lead to an underestimation of the effectiveness of early, stringent lockdowns or an overestimation of the impact of late or lax lockdowns.
+
+Lockdown Effectiveness:
+
+	•	Description: The model attributes changes in the daily growth rate primarily to the presence of a lockdown. Other concurrent interventions (e.g., increased testing, contact tracing, public awareness campaigns) and external factors (e.g., public events, travel restrictions) are not considered in the model.
+	•	Implications: The effectiveness of lockdowns could be confounded by these other factors. For example, a reduction in growth rate might coincide with a lockdown but could be driven by other measures such as mass testing or natural herd immunity. By not accounting for these factors, the model may overstate the effectiveness of lockdowns alone.
+
+4.3 Data Quality and Reporting Bias
+
+Reporting Bias:
+
+	•	Description: The dataset relies on reported confirmed cases, which can be influenced by the testing capacity, reporting practices, and transparency of each country. Some countries might have underreported cases due to limited testing, political reasons, or delays in data collection.
+	•	Implications: If certain countries underreport cases, the analysis might show lower growth rates or smaller outbreaks than actually occurred. This could skew the model’s results, leading to biased conclusions about the effectiveness of interventions in those countries. Additionally, countries with better testing and reporting infrastructure might appear to have higher cases, not necessarily because the outbreak was worse, but because it was better documented.
+
+Data Completeness:
+
+	•	Description: Missing or incomplete data, especially in the early days of the pandemic, could lead to inaccurate growth rate calculations. For example, if case counts are not reported on certain days, this could artificially inflate or deflate the calculated growth rates.
+	•	Implications: Incomplete data can introduce significant errors into the model, especially if these gaps occur during critical periods (e.g., just before or after a lockdown). This could lead to incorrect inferences about the timing and effectiveness of interventions.
+
+4.4 Analytical Bias
+
+Simplification of Complex Relationships:
+
+	•	Description: The analysis simplifies the complex dynamics of the COVID-19 pandemic by focusing primarily on the impact of lockdowns on case growth rates.
+	•	Implications: The pandemic’s progression was influenced by a myriad of factors, including social behaviors, economic conditions, public health infrastructure, and government policies beyond lockdowns. Simplifying the analysis to focus on lockdowns alone may overlook the interaction between these factors, leading to an incomplete
